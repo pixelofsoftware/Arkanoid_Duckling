@@ -1,0 +1,3 @@
+Pięć próbek dźwięku (mono PCM16, 22050 Hz): hit, drop, lost, win, lose.
+Pochodzą z duckling-biblioteki (przyklady/fizyka/zasoby, autorzy opisani w AUTORSTWO.txt).
+Licencja: CC0-1.0 (domena publiczna).

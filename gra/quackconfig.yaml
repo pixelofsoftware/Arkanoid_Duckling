@@ -1,0 +1,15 @@
+metadata:
+  name: arkanoid_gra
+  version: '1.0.0'
+  license: MIT
+  description: Arkanoid w Ducklingu - okno, klawiatura, rysowanie i dzwiek (pakiet grafika)
+dependencies:
+  arkanoid_logika:
+    source:
+      path: '../logika'
+  fizyka:
+    source:
+      path: '../zewnetrzne/fizyka'
+  grafika:
+    source:
+      path: '../zewnetrzne/grafika'

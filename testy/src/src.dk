@@ -1,0 +1,216 @@
+#{
+    Testy logiki Arkanoida (fizyka bez okna): `duck run` w katalogu testy/.
+    Kod wyjścia to liczba nieudanych sprawdzeń (0 = wszystko w porządku).
+#}
+import arkanoid_logika as model;
+import fizyka.gra as gra;
+import std.math as math;
+
+const KLATKA: f32 = 0.016666668f32;
+
+var nieudane: i32 = 0;
+var wszystkie: i32 = 0;
+
+fun sprawdz(warunek: bool, opis: str) -> () = {
+    wszystkie += 1;
+    if (warunek) {
+        print(f"  OK    {opis}\n".asSlice());
+    } else {
+        nieudane += 1;
+        print(f"  BLAD  {opis}\n".asSlice());
+    }
+}
+
+fun blisko(a: f32, b: f32, tolerancja: f32) -> bool = {
+    let roznica = a - b;
+    return roznica <= tolerancja and roznica >= -tolerancja;
+}
+
+fun szybkosc(p: model.StanPilki) -> f32 = {
+    return math.sqrt(p.vx * p.vx + p.vy * p.vy);
+}
+
+fun postaw(g: ref model.Gra, px: f32, py: f32, vx: f32, vy: f32) -> () = {
+    model.postawPilke(g, px, py, vx, vy);
+}
+
+fun klatki(g: ref model.Gra, liczba: i32) -> () = {
+    var n: i32 = 0;
+    while (n < liczba) { model.aktualizuj(g, KLATKA, false, false, false); n += 1; }
+}
+
+fun testStartu() -> () = {
+    print("Start\n");
+    var g = model.Gra();
+    sprawdz(model.otworz(&g) == gra.OK, "swiat sie otwiera (sciany, paletka, pilka, cegly)");
+    sprawdz(g.cegly.length() == 60 and g.zycia == 3 and g.poziom == 1 and g.punkty == 0, "poziom 1: 60 cegiel, 3 zycia, 0 punktow");
+    let p = model.stanPilki(&g);
+    sprawdz(g.przyklejona and blisko(p.x, 400.0, 0.01f32) and blisko(p.y, 539.0, 0.01f32), "pilka czeka na srodku paletki");
+    model.zamknij(&g);
+}
+
+fun testPaletki() -> () = {
+    print("Paletka i start pilki\n");
+    var g = model.Gra();
+    model.otworz(&g);
+    model.aktualizuj(&g, 0.1f32, false, true, false);
+    sprawdz(blisko(g.paletkaX, 465.0, 0.01f32) and blisko(model.stanPilki(&g).x, 465.0, 0.01f32),
+        "w prawo: 650 px/s * 0,1 s, przyklejona pilka jedzie z paletka");
+    var n: i32 = 0;
+    while (n < 30) { model.aktualizuj(&g, 0.1f32, false, true, false); n += 1; }
+    sprawdz(blisko(g.paletkaX, 725.0, 0.01f32), "paletka zatrzymuje sie przy prawej scianie");
+    model.aktualizuj(&g, KLATKA, false, false, true);
+    klatki(&g, 3);
+    let p = model.stanPilki(&g);
+    sprawdz(not g.przyklejona and p.vy > 0.0 and blisko(szybkosc(p), 7.0, 0.05f32), "spacja: pilka leci w gore z szybkoscia 7 m/s");
+    model.zamknij(&g);
+}
+
+fun testOdbic() -> () = {
+    print("Odbicia: sciana, cegla, paletka\n");
+    var g = model.Gra();
+    model.otworz(&g);
+    postaw(&g, 60.0, 400.0, -5.6f32, 4.2f32);
+    klatki(&g, 20);
+    let s = model.stanPilki(&g);
+    sprawdz(s.vx > 0.0 and blisko(szybkosc(s), 7.0, 0.05f32), "lewa sciana odbija pilke, szybkosc bez zmian");
+
+    var c = model.Gra();
+    model.otworz(&c);
+    postaw(&c, 58.0, 400.0, 0.0, 7.0);
+    klatki(&c, 30);
+    sprawdz(c.cegly.length() == 59 and c.punkty == 20 and model.stanPilki(&c).vy < 0.0,
+        "pilka zbija cegle z 6. wiersza (20 pkt) i odbija sie w dol");
+
+    var s1 = model.Gra();
+    model.otworz(&s1);
+    postaw(&s1, 400.0, 450.0, 0.0, -7.0);
+    klatki(&s1, 21);
+    let srodek = model.stanPilki(&s1);
+    sprawdz(srodek.vy > 0.0 and blisko(srodek.vx, 0.0, 0.3f32), "srodek paletki: odbicie prawie pionowe");
+
+    var s2 = model.Gra();
+    model.otworz(&s2);
+    postaw(&s2, 450.0, 450.0, 0.0, -7.0);
+    klatki(&s2, 21);
+    let brzeg = model.stanPilki(&s2);
+    sprawdz(brzeg.vy > 0.0 and brzeg.vx > 4.0, "prawa czesc paletki: pilka odlatuje w prawo (ok. 48 stopni)");
+
+    var m = model.Gra();
+    model.otworz(&m);
+    postaw(&m, 400.0, 400.0, 7.0, 0.1f32);
+    klatki(&m, 1);
+    let pozioma = model.stanPilki(&m);
+    sprawdz(pozioma.vy >= 0.3f32 * 7.0 - 0.01f32, "prawie pozioma pilka dostaje co najmniej 30% ruchu w pionie");
+    model.zamknij(&g);
+    model.zamknij(&c);
+    model.zamknij(&s1);
+    model.zamknij(&s2);
+    model.zamknij(&m);
+}
+
+fun testZyc() -> () = {
+    print("Zycia i koniec gry\n");
+    var g = model.Gra();
+    model.otworz(&g);
+    postaw(&g, 700.0, 580.0, 0.0, -7.0);
+    klatki(&g, 15);
+    sprawdz(g.zycia == 2 and g.przyklejona, "pilka za dolna krawedzia: -1 zycie, pilka wraca na paletke");
+    var proba: i32 = 0;
+    while (not g.koniec and proba < 5) {
+        postaw(&g, 700.0, 580.0, 0.0, -7.0);
+        klatki(&g, 15);
+        proba += 1;
+    }
+    sprawdz(g.koniec and g.zycia == 0 and proba == 2, "po trzech straconych pilkach koniec gry");
+    let paletka = g.paletkaX;
+    model.aktualizuj(&g, 0.1f32, true, false, true);
+    sprawdz(blisko(g.paletkaX, paletka, 0.001f32), "po koncu gry nic sie nie rusza");
+    model.zamknij(&g);
+}
+
+fun testPoziomow() -> () = {
+    print("Cegly i poziomy\n");
+    var g = model.Gra();
+    model.otworz(&g);
+    g.poziom = 2;
+    model.zbudujPoziom(&g);
+    sprawdz(g.cegly.length() == 50, "poziom 2: piramida z 50 cegiel");
+    var twarda: i32 = -1;
+    var i: i64 = 0;
+    while (i < g.cegly.length()) {
+        if (g.cegly.at(i).maks == 2 and twarda < 0) twarda = g.cegly.at(i).ksztalt;
+        i += 1;
+    }
+    model.trafCegle(&g, twarda);
+    model.usunZbite(&g);
+    sprawdz(g.cegly.length() == 50 and g.punkty == 0, "twarda cegla po pierwszym trafieniu zostaje");
+    model.trafCegle(&g, twarda);
+    model.usunZbite(&g);
+    sprawdz(g.cegly.length() == 49 and g.punkty == 50, "po drugim znika i daje 50 punktow");
+    var j: i64 = 0;
+    while (j < g.cegly.length()) {
+        var ksztalt: i32 = g.cegly.at(j).ksztalt;
+        model.trafCegle(&g, ksztalt);
+        model.trafCegle(&g, ksztalt);
+        j += 1;
+    }
+    model.usunZbite(&g);
+    model.aktualizuj(&g, KLATKA, false, false, false);
+    sprawdz(g.poziom == 3 and g.nowyPoziom and g.przyklejona, "wszystkie cegly zbite: nastepny poziom, pilka na paletce");
+    sprawdz(g.cegly.length() == 40, "poziom 3: szachownica z twardym pasem (40 cegiel)");
+    model.zamknij(&g);
+}
+
+fun testDlugiejGry() -> () = {
+    print("Dluga gra i staly krok\n");
+    var g = model.Gra();
+    model.otworz(&g);
+    model.aktualizuj(&g, KLATKA, false, false, true);
+    var szybkoscDobra = true;
+    var n: i32 = 0;
+    while (n < 900) {
+        # Automat: paletka zawsze pod piłką.
+        model.ustawPaletke(&g, model.stanPilki(&g).x);
+        model.aktualizuj(&g, KLATKA, false, false, false);
+        if (not g.przyklejona and not blisko(szybkosc(model.stanPilki(&g)), model.predkoscPilki(&g), 0.05f32)) szybkoscDobra = false;
+        n += 1;
+    }
+    sprawdz(g.zycia == 3, "automat z paletka pod pilka nie traci pilki przez 15 s");
+    sprawdz(g.cegly.length() < 60 and g.punkty > 0, "pilka zbija cegly");
+    sprawdz(szybkoscDobra, "szybkosc pilki zawsze rowna docelowej (rosnie z liczba zbitych cegiel)");
+
+    var a = model.Gra();
+    var b = model.Gra();
+    model.otworz(&a);
+    model.otworz(&b);
+    postaw(&a, 300.0, 400.0, 4.2f32, 5.6f32);
+    postaw(&b, 300.0, 400.0, 4.2f32, 5.6f32);
+    var k: i32 = 0;
+    while (k < 30) { model.aktualizuj(&a, 1.0f32 / 30.0f32, false, false, false); k += 1; }
+    # Krok fizyki jest stały (1/60 s): po tej samej liczbie kroków stan musi być ten sam.
+    k = 0;
+    while (b.sesja.stepIndex < a.sesja.stepIndex and k < 1000) {
+        model.aktualizuj(&b, 1.0f32 / 144.0f32, false, false, false);
+        k += 1;
+    }
+    let pa = model.stanPilki(&a);
+    let pb = model.stanPilki(&b);
+    sprawdz(blisko(pa.x, pb.x, 0.01f32) and blisko(pa.y, pb.y, 0.01f32) and a.cegly.length() == b.cegly.length(),
+        "po tej samej liczbie krokow pilka w tym samym miejscu przy 30 i 144 fps");
+    model.zamknij(&g);
+    model.zamknij(&a);
+    model.zamknij(&b);
+}
+
+fun main() -> i64 = {
+    print("Testy logiki: Arkanoid\n");
+    testStartu();
+    testPaletki();
+    testOdbic();
+    testZyc();
+    testPoziomow();
+    testDlugiejGry();
+    print(f"Wynik: {wszystkie - nieudane}/{wszystkie} sprawdzen udanych\n".asSlice());
+    return nieudane as i64;
+}

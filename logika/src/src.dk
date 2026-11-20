@@ -1,0 +1,461 @@
+#{
+    Arkanoid (Breakout): logika gry na pakiecie fizyka (port Box2D), bez okna.
+
+    Fizyka liczy ruch piłki i odbicia od ścian i cegieł. Gra czyta po każdym kroku
+    zdarzenia początku zderzenia (contact begin) zgłaszane przez kształt piłki
+    i na ich podstawie zbija cegły, liczy punkty i ustawia kąt odbicia od paletki.
+
+    Układ: ekran 800x600 pikseli, 50 pikseli na metr, punkt (0, 0) świata w pikselu
+    (400, 600), oś Y świata w górę. Paletka, cegły i ściany są podawane w pikselach
+    i przeliczane na metry.
+#}
+import fizyka.start as start;
+import fizyka.gra as gra;
+import fizyka.kola.*;
+import fizyka.zbior.*;
+import std.math as math;
+
+const SZEROKOSC: i32 = 800;
+const WYSOKOSC: i32 = 600;
+const PIKSELE_NA_METR: f32 = 50.0;
+
+# Pudełko gry w pikselach: ściany po bokach i sufit pod paskiem wyniku.
+const LEWA: f32 = 20.0;
+const PRAWA: f32 = 780.0;
+const GORA: f32 = 70.0;
+
+const CEGLA_SZER: f32 = 74.0;
+const CEGLA_WYS: f32 = 24.0;
+const CEGLY_X: f32 = 21.0;          # lewa krawędź pierwszej kolumny
+const CEGLY_Y: f32 = 110.0;         # górna krawędź pierwszego wiersza
+const KROK_X: f32 = 76.0;
+const KROK_Y: f32 = 26.0;
+const KOLUMNY: i32 = 10;
+const WIERSZE: i32 = 7;
+
+const PALETKA_SZER: f32 = 110.0;
+const PALETKA_WYS: f32 = 14.0;
+const PALETKA_Y: f32 = 550.0;       # górna krawędź paletki
+const PALETKA_PREDKOSC: f32 = 650.0; # piksele na sekundę
+
+const PROMIEN_PX: f32 = 8.0;
+const ZYCIA_NA_START: i32 = 3;
+const MAKS_KAT: f32 = 1.0471976f32; # 60 stopni: największe odchylenie od pionu przy paletce
+const MIN_PION: f32 = 0.3f32;       # pionowa część prędkości to co najmniej 30%
+const MAKS_CZAS_KLATKI_NS: i64 = 100000000;
+
+class Cegla {
+    cialo: gra.BodyNumber = gra.BodyNumber();
+    ksztalt: i32 = -1;   # numer (slot) kształtu w świecie fizyki
+    kolumna: i32 = 0;
+    wiersz: i32 = 0;
+    wytrzymalosc: i32 = 1;
+    maks: i32 = 1;
+}
+
+fun pusteCegly() -> List[Cegla] = {
+    var puste: List[Cegla];
+    return puste;
+}
+
+class Gra {
+    sesja: start.GameSession = start.GameSession();
+    pilka: gra.BodyNumber = gra.BodyNumber();
+    pilkaKsztalt: i32 = -1;
+    paletka: gra.BodyNumber = gra.BodyNumber();
+    paletkaKsztalt: i32 = -1;
+    paletkaX: f32 = 400.0;      # środek paletki w pikselach
+    cegly: List[Cegla] = pusteCegly();
+    punkty: i64 = 0;
+    zycia: i32 = ZYCIA_NA_START;
+    poziom: i32 = 1;
+    trafienia: i32 = 0;         # zbite cegły na tym poziomie (przyspieszają piłkę)
+    przyklejona: bool = true;   # piłka leży na paletce i czeka na start
+    koniec: bool = false;
+    pauza: bool = false;
+    # Co się stało w ostatniej klatce (do dźwięków i napisów).
+    zbiteWKlatce: i32 = 0;
+    odbiciaWKlatce: i32 = 0;
+    stracona: bool = false;
+    nowyPoziom: bool = false;
+}
+
+# --- przeliczanie jednostek ---------------------------------------------------------------
+
+fun metryX(px: f32) -> f32 = (px - (SZEROKOSC / 2) as f32) / PIKSELE_NA_METR;
+fun metryY(py: f32) -> f32 = ((WYSOKOSC as f32) - py) / PIKSELE_NA_METR;
+fun pikselX(mx: f32) -> f32 = mx * PIKSELE_NA_METR + (SZEROKOSC / 2) as f32;
+fun pikselY(my: f32) -> f32 = (WYSOKOSC as f32) - my * PIKSELE_NA_METR;
+
+# --- poziomy -------------------------------------------------------------------------------
+
+#{
+    Wytrzymałość cegły (0 = brak) w danym wierszu i kolumnie. Trzy układy powtarzają się
+    co trzy poziomy; na kolejnych okrążeniach piłka jest szybsza.
+#}
+fun cegla(poziomGry: i32, wiersz: i32, kolumna: i32) -> i32 = {
+    let uklad = (poziomGry - 1) % 3;
+    var wynik: i32 = 0;
+    if (uklad == 0) {
+        if (wiersz < 6) wynik = 1;                     # pełny mur
+    }
+    if (uklad == 1) {
+        # Piramida: wiersz w ma cegły w kolumnach odległych od środka o najwyżej w.
+        var odleglosc: i32 = kolumna - 5;
+        if (kolumna < 5) odleglosc = 4 - kolumna;
+        if (odleglosc <= wiersz) wynik = 1;
+        if (wynik == 1 and wiersz < 2) wynik = 2;
+    }
+    if (uklad == 2) {
+        if ((wiersz + kolumna) % 2 == 0) wynik = 1;    # szachownica
+        if (wiersz == 3) wynik = 2;                    # twardy pas w środku
+    }
+    return wynik;
+}
+
+fun wartoscCegly(c: ref Cegla) -> i64 = {
+    if (c.maks > 1) return 50;
+    return (10 * (WIERSZE - c.wiersz)) as i64;
+}
+
+fun predkoscPilki(g: ref Gra) -> f32 = {
+    let podstawa = 7.0f32 * (1.0 + 0.1f32 * ((g.poziom - 1) as f32));
+    var v: f32 = podstawa + 0.05f32 * (g.trafienia as f32);
+    if (v > 13.0) v = 13.0;
+    return v;
+}
+
+# --- budowa świata ---------------------------------------------------------------------------
+
+# Nieruchome pudełko podane w pikselach (lewy górny róg, szerokość, wysokość).
+fun pudelko(g: ref Gra, px: f32, py: f32, szer: f32, wys: f32) -> gra.PairResult = {
+    var opcje = start.ObjectSettings();
+    opcje.dynamic = false;
+    opcje.friction = 0.0;
+    opcje.restitution = 1.0;
+    let srodek = Vec2(metryX(px + szer / 2.0), metryY(py + wys / 2.0));
+    let polowa = Vec2(szer / 2.0 / PIKSELE_NA_METR, wys / 2.0 / PIKSELE_NA_METR);
+    return start.addBox(&g.sesja, srodek, polowa, opcje);
+}
+
+fun zbudujPoziom(g: ref Gra) -> i32 = {
+    var stan: i32 = gra.OK;
+    var i: i64 = 0;
+    while (i < g.cegly.length()) {
+        gra.destroyBody(g.sesja.world, g.cegly.at(i).cialo);
+        i += 1;
+    }
+    var nowe: List[Cegla];
+    var w: i32 = 0;
+    while (w < WIERSZE) {
+        var k: i32 = 0;
+        while (k < KOLUMNY) {
+            let twardosc = cegla(g.poziom, w, k);
+            if (twardosc > 0 and stan == gra.OK) {
+                let para = pudelko(g, CEGLY_X + (k as f32) * KROK_X, CEGLY_Y + (w as f32) * KROK_Y, CEGLA_SZER, CEGLA_WYS);
+                stan = para.status;
+                if (stan == gra.OK) nowe.push(Cegla(para.body.number, para.shape.number.slot, k, w, twardosc, twardosc));
+            }
+            k += 1;
+        }
+        w += 1;
+    }
+    g.cegly = move nowe;
+    g.trafienia = 0;
+    return stan;
+}
+
+# Piłka: dynamiczne koło bez tarcia, odbicie 1. Tylko jej kształt zgłasza zderzenia,
+# a Box2D zgłasza zderzenie, gdy zdarzenia ma włączone choć jeden z kształtów.
+fun dodajPilke(g: ref Gra) -> i32 = {
+    var opcje = start.ObjectSettings();
+    opcje.friction = 0.0;
+    opcje.restitution = 1.0;
+    opcje.fixedRotation = true;
+    var material = start.objectMaterial(opcje);
+    material.circle = Circle(Vec2(), PROMIEN_PX / PIKSELE_NA_METR);
+    material.enableContactEvents = true;
+    let para = gra.createBodyWithShape(g.sesja.world, start.objectBody(Vec2(0.0, 1.0), opcje),
+        material, true, false, Key64());
+    if (para.status == gra.OK) {
+        g.pilka = para.body.number;
+        g.pilkaKsztalt = para.shape.number.slot;
+    }
+    return para.status;
+}
+
+# Piłka leży na paletce (3 piksele nad nią) i porusza się razem z nią.
+fun przyklejPilke(g: ref Gra) -> () = {
+    g.przyklejona = true;
+    let miejsce = Vec2(metryX(g.paletkaX), metryY(PALETKA_Y - PROMIEN_PX - 3.0));
+    gra.setTransform(g.sesja.world, g.pilka, miejsce, Rot(1.0, 0.0));
+    gra.setLinearVelocity(g.sesja.world, g.pilka, Vec2(0.0, 0.0));
+}
+
+fun ustawPaletke(g: ref Gra, srodekPx: f32) -> () = {
+    var x: f32 = srodekPx;
+    let minX = LEWA + PALETKA_SZER / 2.0;
+    let maxX = PRAWA - PALETKA_SZER / 2.0;
+    if (x < minX) x = minX;
+    if (x > maxX) x = maxX;
+    g.paletkaX = x;
+    let miejsce = Vec2(metryX(x), metryY(PALETKA_Y + PALETKA_WYS / 2.0));
+    gra.setTransform(g.sesja.world, g.paletka, miejsce, Rot(1.0, 0.0));
+    if (g.przyklejona) przyklejPilke(g);
+}
+
+# Nowa gra w g (np. model.Gra()); zwraca gra.OK albo status błędu fizyki.
+fun otworz(g: ref Gra) -> i32 = {
+    var ustawienia = start.GameSettings();
+    ustawienia.physics.gravity = Vec2(0.0, 0.0);
+    ustawienia.enableSleeping = false;
+    ustawienia.pixelsPerMetre = PIKSELE_NA_METR;
+    ustawienia.screenOrigin = Vec2((SZEROKOSC / 2) as f32, WYSOKOSC as f32);
+    var otwarty = start.openGame(ustawienia);
+    if (otwarty.status != gra.OK) return otwarty.status;
+    g.sesja = otwarty.session;
+    g.cegly = pusteCegly();
+    g.punkty = 0;
+    g.zycia = ZYCIA_NA_START;
+    g.poziom = 1;
+    g.koniec = false;
+    g.pauza = false;
+    # Ściany sięgają poniżej ekranu, żeby piłka nie uciekła bokiem przy dnie.
+    var stan: i32 = pudelko(g, 0.0, GORA - 20.0, LEWA, 700.0).status;
+    if (stan == gra.OK) stan = pudelko(g, PRAWA, GORA - 20.0, (SZEROKOSC as f32) - PRAWA, 700.0).status;
+    if (stan == gra.OK) stan = pudelko(g, 0.0, GORA - 20.0, SZEROKOSC as f32, 20.0).status;
+    if (stan == gra.OK) {
+        let para = pudelko(g, g.paletkaX - PALETKA_SZER / 2.0, PALETKA_Y, PALETKA_SZER, PALETKA_WYS);
+        stan = para.status;
+        g.paletka = para.body.number;
+        g.paletkaKsztalt = para.shape.number.slot;
+    }
+    if (stan == gra.OK) stan = dodajPilke(g);
+    if (stan == gra.OK) stan = zbudujPoziom(g);
+    if (stan == gra.OK) {
+        ustawPaletke(g, (SZEROKOSC / 2) as f32);
+        przyklejPilke(g);
+    } else {
+        start.closeGame(&g.sesja);
+    }
+    return stan;
+}
+
+fun zamknij(g: ref Gra) -> i32 = {
+    g.cegly = pusteCegly();
+    return start.closeGame(&g.sesja);
+}
+
+# --- piłka ---------------------------------------------------------------------------------------
+
+class StanPilki { x: f32 = 0.0; y: f32 = 0.0; vx: f32 = 0.0; vy: f32 = 0.0; }
+
+# Położenie piłki w pikselach i prędkość w metrach na sekundę (oś Y w górę).
+fun stanPilki(g: ref Gra) -> StanPilki = {
+    var wynik = StanPilki();
+    let cialo = gra.lookupBody(g.sesja.world, g.pilka);
+    if (cialo.status == gra.OK) {
+        wynik.x = pikselX(cialo.value.transform.p.x);
+        wynik.y = pikselY(cialo.value.transform.p.y);
+        wynik.vx = cialo.value.linearVelocity.x;
+        wynik.vy = cialo.value.linearVelocity.y;
+    }
+    return wynik;
+}
+
+fun ustawPredkosc(g: ref Gra, vx: f32, vy: f32) -> () = {
+    gra.setLinearVelocity(g.sesja.world, g.pilka, Vec2(vx, vy));
+}
+
+# Piłka w punkcie ekranu (piksele) z prędkością w m/s (oś Y w górę); do testów i zrzutów.
+fun postawPilke(g: ref Gra, px: f32, py: f32, vx: f32, vy: f32) -> () = {
+    g.przyklejona = false;
+    gra.setTransform(g.sesja.world, g.pilka, Vec2(metryX(px), metryY(py)), Rot(1.0, 0.0));
+    ustawPredkosc(g, vx, vy);
+}
+
+# Start piłki z paletki: lekko w prawo od pionu.
+fun wystrzel(g: ref Gra) -> () = {
+    if (g.przyklejona and not g.koniec) {
+        g.przyklejona = false;
+        let v = predkoscPilki(g);
+        let kat = b2ComputeCosSin(0.2617994f32);   # 15 stopni
+        ustawPredkosc(g, v * kat.sine, v * kat.cosine);
+    }
+}
+
+#{
+    Po każdym kroku: stała szybkość piłki (zależna od poziomu i liczby zbitych cegieł)
+    i co najmniej 30% ruchu w pionie, żeby piłka nie krążyła poziomo między ścianami.
+#}
+fun wyrownajPredkosc(g: ref Gra) -> () = {
+    let p = stanPilki(g);
+    let v = predkoscPilki(g);
+    var vx: f32 = p.vx;
+    var vy: f32 = p.vy;
+    let dlugosc = math.sqrt(vx * vx + vy * vy);
+    if (dlugosc < 0.001f32) {
+        vx = 0.0;
+        vy = v;
+    } else {
+        vx = vx / dlugosc * v;
+        vy = vy / dlugosc * v;
+    }
+    let minPion = MIN_PION * v;
+    if (vy < minPion and vy > -minPion) {
+        if (vy < 0.0) vy = -minPion;
+        else vy = minPion;
+        let reszta = math.sqrt(v * v - vy * vy);
+        if (vx < 0.0) vx = -reszta;
+        else vx = reszta;
+    }
+    ustawPredkosc(g, vx, vy);
+}
+
+# Odbicie od paletki: kąt zależy od miejsca trafienia (środek: pionowo, brzeg: 60 stopni).
+fun odbijOdPaletki(g: ref Gra) -> () = {
+    let p = stanPilki(g);
+    var przesuniecie: f32 = (p.x - g.paletkaX) / (PALETKA_SZER / 2.0 + PROMIEN_PX);
+    if (przesuniecie > 1.0) przesuniecie = 1.0;
+    if (przesuniecie < -1.0) przesuniecie = -1.0;
+    let kat = b2ComputeCosSin(przesuniecie * MAKS_KAT);
+    let v = predkoscPilki(g);
+    ustawPredkosc(g, v * kat.sine, v * kat.cosine);
+}
+
+# --- zderzenia --------------------------------------------------------------------------------
+
+fun trafCegle(g: ref Gra, ksztalt: i32) -> bool = {
+    var trafiona = false;
+    var i: i64 = 0;
+    while (i < g.cegly.length()) {
+        if (g.cegly.at(i).ksztalt == ksztalt and g.cegly.at(i).wytrzymalosc > 0) {
+            g.cegly.at(i).wytrzymalosc -= 1;
+            if (g.cegly.at(i).wytrzymalosc == 0) {
+                g.punkty += wartoscCegly(g.cegly.at(i));
+                g.trafienia += 1;
+                g.zbiteWKlatce += 1;
+                gra.destroyBody(g.sesja.world, g.cegly.at(i).cialo);
+            }
+            trafiona = true;
+        }
+        i += 1;
+    }
+    return trafiona;
+}
+
+# Usuń z listy cegły zbite w tym kroku.
+fun usunZbite(g: ref Gra) -> () = {
+    var zostaja: List[Cegla];
+    var i: i64 = 0;
+    while (i < g.cegly.length()) {
+        if (g.cegly.at(i).wytrzymalosc > 0) {
+            var c: Cegla = g.cegly.at(i);
+            zostaja.push(c);
+        }
+        i += 1;
+    }
+    g.cegly = move zostaja;
+}
+
+#{
+    Zdarzenia początku zderzenia z ostatniego kroku fizyki. Normalna kontaktu z manifoldu
+    wskazuje od kształtu A do kształtu B. Piłkę odbijamy sami od prędkości sprzed kroku
+    (vx, vy): v' = v - 2 (v . n) n, gdzie n wskazuje od piłki do ściany albo cegły.
+    W tym porcie Box2D statyczna ściana zatrzymuje piłkę zamiast ją odbić, mimo odbicia 1.
+#}
+fun obsluzZderzenia(g: ref Gra, vx: f32, vy: f32) -> () = {
+    var zdarzenia = gra.copyContactEvents(g.sesja.world);
+    if (zdarzenia.status == gra.OK) {
+        var nowaVx: f32 = vx;
+        var nowaVy: f32 = vy;
+        var odbita = false;
+        var paletka = false;
+        var i: i64 = 0;
+        while (i < zdarzenia.begin.length()) {
+            let a = zdarzenia.begin.at(i).shapeA.slot;
+            let b = zdarzenia.begin.at(i).shapeB.slot;
+            var nx: f32 = zdarzenia.begin.at(i).manifold.normal.x;
+            var ny: f32 = zdarzenia.begin.at(i).manifold.normal.y;
+            var inny: i32 = -1;
+            if (a == g.pilkaKsztalt) inny = b;
+            if (b == g.pilkaKsztalt) {
+                inny = a;
+                nx = -nx;
+                ny = -ny;
+            }
+            if (inny >= 0 and not g.przyklejona) {
+                g.odbiciaWKlatce += 1;
+                if (inny == g.paletkaKsztalt) {
+                    paletka = true;
+                } else {
+                    trafCegle(g, inny);
+                    let wStrone = nowaVx * nx + nowaVy * ny;
+                    if (wStrone > 0.0) {
+                        nowaVx = nowaVx - 2.0 * wStrone * nx;
+                        nowaVy = nowaVy - 2.0 * wStrone * ny;
+                        odbita = true;
+                    }
+                }
+            }
+            i += 1;
+        }
+        if (odbita) ustawPredkosc(g, nowaVx, nowaVy);
+        if (paletka) odbijOdPaletki(g);
+        usunZbite(g);
+    }
+}
+
+# --- klatka gry -------------------------------------------------------------------------------
+
+fun krokFizyki(g: ref Gra, nanosekundy: i64) -> () = {
+    var czas: i64 = nanosekundy;
+    if (czas < 0) czas = 0;
+    if (czas > MAKS_CZAS_KLATKI_NS) czas = MAKS_CZAS_KLATKI_NS;
+    let budzet = start.queueTime(&g.sesja, czas);
+    var wykonane: i32 = 0;
+    var dobrze = budzet.status == gra.OK;
+    while (dobrze and wykonane < budzet.steps) {
+        let przed = stanPilki(g);
+        dobrze = start.tick(&g.sesja).status == gra.OK;
+        if (dobrze) {
+            obsluzZderzenia(g, przed.vx, przed.vy);
+            if (not g.przyklejona) wyrownajPredkosc(g);
+        }
+        wykonane += 1;
+    }
+}
+
+# Jedna klatka: ruch paletki, start piłki, fizyka, utrata piłki, następny poziom.
+fun aktualizuj(g: ref Gra, sekundy: f32, lewo: bool, prawo: bool, wystrzal: bool) -> () = {
+    g.zbiteWKlatce = 0;
+    g.odbiciaWKlatce = 0;
+    g.stracona = false;
+    g.nowyPoziom = false;
+    if (not g.koniec and not g.pauza) {
+        var dt: f32 = sekundy;
+        if (not (dt > 0.0)) dt = 0.0;
+        if (dt > 0.1f32) dt = 0.1f32;
+        var ruch: f32 = 0.0;
+        if (lewo) ruch -= PALETKA_PREDKOSC * dt;
+        if (prawo) ruch += PALETKA_PREDKOSC * dt;
+        if (ruch != 0.0) ustawPaletke(g, g.paletkaX + ruch);
+        if (wystrzal) wystrzel(g);
+        krokFizyki(g, (dt * 1000000000.0) as i64);
+        # Piłka za dolną krawędzią: tracimy życie.
+        if (not g.przyklejona and stanPilki(g).y > (WYSOKOSC as f32) + 20.0) {
+            g.zycia -= 1;
+            g.stracona = true;
+            if (g.zycia <= 0) g.koniec = true;
+            else przyklejPilke(g);
+        }
+        # Wszystkie cegły zbite: następny poziom.
+        if (g.cegly.length() == 0 and not g.koniec) {
+            g.punkty += (500 * g.poziom) as i64;
+            g.poziom += 1;
+            g.nowyPoziom = true;
+            zbudujPoziom(g);
+            przyklejPilke(g);
+        }
+    }
+}

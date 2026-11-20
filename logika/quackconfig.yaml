@@ -1,0 +1,9 @@
+metadata:
+  name: arkanoid_logika
+  version: '1.0.0'
+  license: MIT
+  description: Zasady i fizyka Arkanoida (pakiet fizyka, zdarzenia zderzen), bez okna
+dependencies:
+  fizyka:
+    source:
+      path: '../zewnetrzne/fizyka'

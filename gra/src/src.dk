@@ -1,0 +1,267 @@
+#{
+    Arkanoid: okno, klawiatura, rysowanie i dźwięk (pakiet grafika). Zasady i fizyka są
+    w pakiecie arkanoid_logika.
+
+    Sterowanie: strzałki albo A/D - paletka, spacja - start piłki, P - pauza,
+    M - dźwięk, R - nowa gra, Esc albo zamknięcie okna - wyjście.
+#}
+import grafika;
+import arkanoid_logika as model;
+import fizyka.gra as gra;
+import core.builtins as builtins;
+
+extern("C") {
+    fundecl write(fd: i32, data: cptr char, size: u64) -> i64;
+    fundecl getenv(name: cptr char) -> cptr char;
+}
+
+const TLO: u32 = 0x10141fffu32;
+const SCIANA: u32 = 0x3a4556ffu32;
+const NAPIS: u32 = 0xc8d0dcffu32;
+
+fun bladNaEkran(tekst: str) -> () = {
+    write(2i32, builtins.ptr_from_slice[char](tekst) as cptr char, tekst.length() as u64);
+}
+
+# Kolor cegły według wiersza; twarde cegły są srebrne.
+fun kolorCegly(c: ref model.Cegla) -> u32 = {
+    if (c.maks > 1) {
+        if (c.wytrzymalosc > 1) return 0xc0c8d4ffu32;
+        return 0x8a93a3ffu32;   # pęknięta po pierwszym trafieniu
+    }
+    let w = c.wiersz % 7;
+    var k: u32 = 0xf05454ffu32;
+    if (w == 1) k = 0xf08c3cffu32;
+    if (w == 2) k = 0xf0d23cffu32;
+    if (w == 3) k = 0x6ad25affu32;
+    if (w == 4) k = 0x3cb4f0ffu32;
+    if (w == 5) k = 0x6e78f0ffu32;
+    if (w == 6) k = 0xc86ef0ffu32;
+    return k;
+}
+
+fun rysujCegly(g: ref model.Gra) -> () = {
+    var i: i64 = 0;
+    while (i < g.cegly.length()) {
+        let x = (model.CEGLY_X + (g.cegly.at(i).kolumna as f32) * model.KROK_X) as i32;
+        let y = (model.CEGLY_Y + (g.cegly.at(i).wiersz as f32) * model.KROK_Y) as i32;
+        let szer = model.CEGLA_SZER as i32;
+        let wys = model.CEGLA_WYS as i32;
+        grafika.rectangle(x, y, szer, wys, kolorCegly(g.cegly.at(i)));
+        grafika.rectangle(x + 3, y + 3, szer - 6, 4, 0xffffff40u32);
+        grafika.rectangleLines(x, y, szer, wys, 1.0, 0x00000080u32);
+        if (g.cegly.at(i).maks > 1 and g.cegly.at(i).wytrzymalosc == 1) {
+            grafika.line((x + 20) as f32, y as f32, (x + 34) as f32, (y + wys) as f32, 2.0, 0x30303affu32);
+        }
+        i += 1;
+    }
+}
+
+fun rysujZycia(zycia: i32) -> () = {
+    var n: i32 = 0;
+    while (n < zycia) {
+        grafika.circle(700 + n * 26, 34, 8.0, grafika.WHITE);
+        n += 1;
+    }
+}
+
+fun napisNaSrodku(tekst: str, y: i32, rozmiar: i32, kolorNapisu: u32) -> () = {
+    let pomiar = grafika.textDefaultWidth(tekst, rozmiar);
+    var lewy: i32 = 0;
+    if (pomiar._1 == grafika.OK) lewy = (model.SZEROKOSC - pomiar._2) / 2;
+    grafika.textDefault(tekst, lewy, y, rozmiar, kolorNapisu);
+}
+
+fun rysujScene(g: ref model.Gra, komunikat: str, dzwiek: bool) -> () = {
+    # Pasek wyniku.
+    let punkty = f"PUNKTY {g.punkty}";
+    grafika.textDefault(punkty.asSlice(), 24, 22, 24, grafika.WHITE);
+    let poziom = f"POZIOM {g.poziom}";
+    napisNaSrodku(poziom.asSlice(), 22, 24, grafika.WHITE);
+    rysujZycia(g.zycia);
+    if (not dzwiek) grafika.textDefault("M: dzwiek wylaczony", 560, 4, 14, NAPIS);
+    # Ściany i sufit.
+    grafika.rectangle(0, (model.GORA as i32) - 20, model.LEWA as i32, 700, SCIANA);
+    grafika.rectangle(model.PRAWA as i32, (model.GORA as i32) - 20, model.SZEROKOSC - (model.PRAWA as i32), 700, SCIANA);
+    grafika.rectangle(0, (model.GORA as i32) - 20, model.SZEROKOSC, 20, SCIANA);
+    rysujCegly(g);
+    # Paletka.
+    let px = (g.paletkaX - model.PALETKA_SZER / 2.0) as i32;
+    grafika.rectangle(px, model.PALETKA_Y as i32, model.PALETKA_SZER as i32, model.PALETKA_WYS as i32, 0x66bfffffu32);
+    grafika.rectangle(px + 4, (model.PALETKA_Y as i32) + 2, (model.PALETKA_SZER as i32) - 8, 3, 0xffffff70u32);
+    # Piłka.
+    let p = model.stanPilki(g);
+    grafika.circle(p.x as i32, p.y as i32, model.PROMIEN_PX, grafika.WHITE);
+    if (g.przyklejona and not g.koniec) napisNaSrodku("SPACJA - start", 430, 24, NAPIS);
+    if (komunikat.length() > 0) napisNaSrodku(komunikat, 360, 40, grafika.YELLOW);
+    grafika.textDefault("<- ->  paletka   spacja  start   P  pauza   M  dzwiek   R  nowa gra   Esc", 24, 578, 16, NAPIS);
+    if (g.pauza) {
+        grafika.rectangle(0, 0, model.SZEROKOSC, model.WYSOKOSC, 0x000000a0u32);
+        napisNaSrodku("PAUZA", 260, 52, grafika.WHITE);
+        napisNaSrodku("P - gramy dalej", 330, 22, NAPIS);
+    }
+    if (g.koniec) {
+        grafika.rectangle(0, 0, model.SZEROKOSC, model.WYSOKOSC, 0x000000b0u32);
+        napisNaSrodku("KONIEC GRY", 240, 52, grafika.RED);
+        let wynik = f"Wynik: {g.punkty}   poziom {g.poziom}";
+        napisNaSrodku(wynik.asSlice(), 310, 26, grafika.WHITE);
+        napisNaSrodku("R - nowa gra", 352, 22, NAPIS);
+    }
+}
+
+# --- dźwięk: próbki CC0 z duckling-biblioteki, w katalogu dzwieki/ ---------------------------
+
+class Dzwieki {
+    dziala: bool = false;
+    cegla: u64 = 0u64;
+    odbicie: u64 = 0u64;
+    strata: u64 = 0u64;
+    poziom: u64 = 0u64;
+    koniec: u64 = 0u64;
+}
+
+fun wczytaj(sciezka: str) -> u64 = {
+    let wynik = grafika.soundLoad(sciezka);
+    if (wynik._1 != grafika.OK) return 0u64;
+    grafika.soundVolume(wynik._2, 0.5);
+    return wynik._2;
+}
+
+fun otworzDzwieki() -> Dzwieki = {
+    var d = Dzwieki();
+    if (grafika.audioOpen() == grafika.OK) {
+        d.dziala = true;
+        d.cegla = wczytaj("dzwieki/hit.wav");
+        d.odbicie = wczytaj("dzwieki/drop.wav");
+        d.strata = wczytaj("dzwieki/lost.wav");
+        d.poziom = wczytaj("dzwieki/win.wav");
+        d.koniec = wczytaj("dzwieki/lose.wav");
+    }
+    return d;
+}
+
+fun zagraj(d: ref Dzwieki, uchwyt: u64, wlaczony: bool) -> () = {
+    if (d.dziala and wlaczony and uchwyt != 0u64) grafika.soundPlay(uchwyt);
+}
+
+fun zamknijDzwieki(d: ref Dzwieki) -> () = {
+    if (d.dziala) {
+        if (d.cegla != 0u64) grafika.soundUnload(d.cegla);
+        if (d.odbicie != 0u64) grafika.soundUnload(d.odbicie);
+        if (d.strata != 0u64) grafika.soundUnload(d.strata);
+        if (d.poziom != 0u64) grafika.soundUnload(d.poziom);
+        if (d.koniec != 0u64) grafika.soundUnload(d.koniec);
+        grafika.audioClose();
+    }
+}
+
+# --- tryb zrzutów do README ---------------------------------------------------------------------
+
+fun zrzutyWlaczone() -> bool = {
+    let wartosc: cptr char = getenv(builtins.ptr_from_slice[char]("ARKANOID_ZRZUTY\0") as cptr char);
+    return wartosc as u64 != 0u64;
+}
+
+fun zapiszKlatke(g: ref model.Gra, sciezka: str) -> i32 = {
+    grafika.frameBegin(TLO);
+    rysujScene(g, "", true);
+    let zapis = grafika.frameSave(sciezka);
+    grafika.frameEnd();
+    return zapis;
+}
+
+# Automat do zrzutów: paletka pod piłką, przesunięta o kilka pikseli, żeby kąty się zmieniały.
+fun zapiszZrzuty() -> i32 = {
+    var g = model.Gra();
+    if (model.otworz(&g) != gra.OK) return 1;
+    model.aktualizuj(&g, 0.016666668f32, false, false, true);
+    var n: i32 = 0;
+    while (n < 2400 and not g.koniec) {
+        let p = model.stanPilki(&g);
+        model.ustawPaletke(&g, p.x + (((n / 120) % 5) as f32 - 2.0) * 14.0);
+        model.aktualizuj(&g, 0.016666668f32, false, false, g.przyklejona);
+        n += 1;
+    }
+    var bledy: i32 = 0;
+    if (zapiszKlatke(&g, "zrzuty/gra.png") != grafika.OK) bledy += 1;
+    g.zycia = 1;
+    model.postawPilke(&g, 700.0, 590.0, 0.0, -7.0);
+    var k: i32 = 0;
+    while (k < 20) { model.aktualizuj(&g, 0.016666668f32, false, false, false); k += 1; }
+    if (zapiszKlatke(&g, "zrzuty/koniec.png") != grafika.OK) bledy += 1;
+    model.zamknij(&g);
+    return bledy;
+}
+
+# --- pętla gry -----------------------------------------------------------------------------------
+
+fun main() = {
+    if (grafika.windowOpen(model.SZEROKOSC, model.WYSOKOSC, "Arkanoid w Ducklingu") != grafika.OK) {
+        bladNaEkran("Arkanoid: nie mozna otworzyc okna (brak ekranu albo raylib).\n");
+        return 1;
+    }
+    grafika.setTargetFps(60);
+    if (zrzutyWlaczone()) {
+        let nieZapisane = zapiszZrzuty();
+        grafika.windowClose();
+        if (nieZapisane != 0) {
+            bladNaEkran("Arkanoid: nie zapisano zrzutow (czy istnieje katalog zrzuty/?).\n");
+            return 1;
+        }
+        return 0;
+    }
+
+    var g = model.Gra();
+    if (model.otworz(&g) != gra.OK) {
+        grafika.windowClose();
+        bladNaEkran("Arkanoid: nie mozna utworzyc swiata fizyki.\n");
+        return 1;
+    }
+    var d = otworzDzwieki();
+    var dzwiek = true;
+    var input = grafika.InputState();
+    var komunikat = "";
+    var czasKomunikatu: f32 = 0.0;
+
+    while (not input.closeRequested and not grafika.keyPressed(grafika.KEY_ESCAPE)) {
+        # 1. Wejście.
+        grafika.inputPoll(&input);
+        let dt = grafika.frameTime();
+        let lewo = grafika.keyDown(grafika.KEY_LEFT) or grafika.keyDown(grafika.KEY_A);
+        let prawo = grafika.keyDown(grafika.KEY_RIGHT) or grafika.keyDown(grafika.KEY_D);
+        let wystrzal = grafika.keyPressed(grafika.KEY_SPACE);
+        if (grafika.keyPressed(grafika.KEY_P) and not g.koniec) g.pauza = not g.pauza;
+        if (grafika.keyPressed(grafika.KEY_M)) dzwiek = not dzwiek;
+        if (grafika.keyPressed(grafika.KEY_R)) {
+            model.zamknij(&g);
+            g = model.Gra();
+            model.otworz(&g);
+            komunikat = "";
+        }
+
+        # 2. Zmiana stanu gry i dźwięki.
+        let bylKoniec = g.koniec;
+        model.aktualizuj(&g, dt, lewo, prawo, wystrzal);
+        if (g.zbiteWKlatce > 0) zagraj(&d, d.cegla, dzwiek);
+        else if (g.odbiciaWKlatce > 0) zagraj(&d, d.odbicie, dzwiek);
+        if (g.koniec and not bylKoniec) zagraj(&d, d.koniec, dzwiek);
+        else if (g.stracona) zagraj(&d, d.strata, dzwiek);
+        if (g.nowyPoziom) {
+            zagraj(&d, d.poziom, dzwiek);
+            komunikat = "NASTEPNY POZIOM!";
+            czasKomunikatu = 1.5;
+        }
+        if (czasKomunikatu > 0.0) czasKomunikatu -= dt;
+        if (not (czasKomunikatu > 0.0)) komunikat = "";
+
+        # 3. Rysowanie.
+        grafika.frameBegin(TLO);
+        rysujScene(&g, komunikat, dzwiek);
+        grafika.frameEnd();
+    }
+
+    zamknijDzwieki(&d);
+    grafika.windowClose();
+    model.zamknij(&g);
+    return 0;
+}

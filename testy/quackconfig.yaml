@@ -1,0 +1,11 @@
+metadata:
+  name: testy_arkanoida
+  version: '1.0.0'
+  license: MIT
+dependencies:
+  arkanoid_logika:
+    source:
+      path: '../logika'
+  fizyka:
+    source:
+      path: '../zewnetrzne/fizyka'
