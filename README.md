@@ -1,5 +1,7 @@
 # Arkanoid w Ducklingu
 
+![Napisane w Duckling](https://img.shields.io/badge/napisane%20w-Duckling-f2c94c)
+
 Arkanoid (Breakout) napisany w Ducklingu. Paletką odbijasz piłkę i zbijasz cegły. Ruch piłki i zderzenia liczy pakiet `fizyka` (port Box2D 3.1.1), a gra reaguje na **zdarzenia zderzeń**, które fizyka zgłasza po każdym kroku. Okno, klawiatura, rysowanie i dźwięk pochodzą z pakietu `grafika` (raylib 5.5). Oba pakiety są z [duckling-biblioteki](https://github.com/andr729/duckling-biblioteki).
 
 ![Rozgrywka](zrzuty/gra.png)
