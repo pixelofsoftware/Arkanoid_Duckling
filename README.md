@@ -52,7 +52,18 @@ Pierwsza budowa z fizyką trwa około pół minuty. Kompilator wypisuje przy fiz
 Wymagania:
 * Duckling z `duck` w PATH (sprawdzone na `duckc 0.3-alpha (83882805a 2026-11-20)`, macOS 27.2, Apple Silicon);
 * Xcode Command Line Tools (git, make, clang);
-* duckling-biblioteki, gałąź `paczki-duck`, domyślnie w `~/duckling-biblioteki` (inna ścieżka: `./przygotuj_macos.sh /ścieżka`).
+* nic więcej: pakiety `grafika` i `fizyka` oraz raylib dla macOS (Apple Silicon) są w katalogu `zewnetrzne/` (opis: [zewnetrzne/README.md](zewnetrzne/README.md)), więc nie trzeba pobierać duckling-biblioteki ani budować raylib;
+
+## Uruchomienie (Linux)
+
+```sh
+sudo apt install build-essential git cmake libx11-dev libxrandr-dev libxinerama-dev \
+    libxcursor-dev libxi-dev libgl-dev libasound2-dev
+./uruchom.sh          # za pierwszym razem uruchamia ./przygotuj_linux.sh: wersje pakietów dla Linuksa i raylib
+./uruchom.sh testy    # testy logiki, bez okna
+```
+
+Potrzebny jest też Duckling z `duck` w PATH. `przygotuj_linux.sh` kopiuje wersje pakietów z `zewnetrzne/linux/` do `zewnetrzne/` (pliki z repozytorium dostają w git znacznik `skip-worktree`, więc `git status` pozostaje czysty) i buduje statyczną raylib 5.5 skryptem pakietu `grafika`. **Kroki dla Linuksa nie zostały sprawdzone na prawdziwej maszynie z Linuksem.**
 
 ## Struktura
 
@@ -62,7 +73,9 @@ gra/           pakiet arkanoid_gra: okno, klawiatura, rysowanie, dźwięk, pętl
 gra/dzwieki/   próbki dźwięku CC0 z duckling-biblioteki (opis w ZRODLO.txt)
 testy/         pakiet testy_arkanoida: 23 sprawdzenia bez okna, kod wyjścia = liczba błędów
 zrzuty/        obrazy do README: w gra/ uruchom ARKANOID_ZRZUTY=1 ./.duck_build/dev/arkanoid_gra
-przygotuj_macos.sh   raylib 5.5 oraz kopie pakietów grafika i fizyka dla macOS do zewnetrzne/ (poza gitem)
+zewnetrzne/          pakiety grafika i fizyka (wersje dla macOS i Linuksa) oraz raylib dla macOS; opis w zewnetrzne/README.md
+przygotuj_macos.sh   buduje raylib, gdy brakuje jej dla procesora Maca (np. Intel)
+przygotuj_linux.sh   przygotowanie na Linuksie: wersje pakietów z zewnetrzne/linux/ i raylib
 ```
 
 Testy sprawdzają między innymi:
@@ -78,4 +91,4 @@ Testy sprawdzają między innymi:
 
 ## Licencja
 
-MIT. Kopie pakietów `grafika` i `fizyka` w `zewnetrzne/` pochodzą z duckling-biblioteki (MIT; fizyka jest portem Box2D, MIT, Erin Catto). raylib ma licencję zlib, a próbki dźwięku w `gra/dzwieki/` są na licencji CC0.
+MIT. Kopie pakietów `grafika` i `fizyka` w `zewnetrzne/` pochodzą z duckling-biblioteki (MIT, Paweł Kępczyński, szczegóły w `zewnetrzne/README.md`; fizyka jest portem Box2D, MIT, Erin Catto). raylib ma licencję zlib, a próbki dźwięku w `gra/dzwieki/` są na licencji CC0.
